@@ -214,9 +214,9 @@ def draw_falling_chart(pg, x, y, w, h):
     # arrowhead at the end
     ex, ey = pts[-1]
     pg.tri(ex - 4, ey + 2, 22, 16, RED)
-    # small bars at the bottom
-    for i, bh in enumerate((14, 22, 10, 26)):
-        pg.box(x + 14 + i * 18, y + h - 8 - bh, 10, bh, NAVY2)
+    # index labels, bottom-left, clear of the falling line
+    pg.draw_text(x + 10, y + h - 42, "NIKKEI -3%", 2, NAVY2)
+    pg.draw_text(x + 10, y + h - 24, "KOSPI -6%", 2, RED)
 
 
 def draw_ten_badge(pg, cx, cy, r):
