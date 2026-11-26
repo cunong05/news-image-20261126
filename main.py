@@ -196,27 +196,42 @@ class Page:
 
 # -------------------------------------------------------------- pictograms
 def draw_falling_chart(pg, x, y, w, h):
-    """Share-price chart falling off a cliff, with a red arrow."""
+    """Share-price chart falling off a cliff, with axes and a futures strip.
+
+    A labelled percentage axis (0% / -3% / -6%) on the left, light grid
+    lines, red dots marking each data point on the falling line, an
+    arrowhead at the end, an index legend, and a strip at the bottom
+    noting that US futures slid ahead of Thanksgiving.
+    """
     pg.box(x, y, w, h, WHITE)
     pg.box(x, y, w, 3, INK)
-    # grid
-    for gy in range(1, 4):
-        pg.hbar(x + 8, y + gy * h // 4, w - 16, (220, 222, 226), 1)
-    # descending line: five segments, steeper each time
-    pts = [(x + 10, y + 18), (x + w // 3, y + 34),
-           (x + 2 * w // 3, y + 52), (x + w - 26, y + h - 26)]
+    # percentage axis: labels on the left, grid lines across
+    axis = [("0%", 24), ("-3%", 64), ("-6%", 104)]
+    for label, dy in axis:
+        pg.draw_text(x + 4, y + dy, label, 1, NAVY2)
+        pg.hbar(x + 26, y + dy + 6, w - 34, (220, 222, 226), 1)
+    # descending line: four points, steeper each time, dots on each point
+    pts = [(x + 32, y + 30), (x + 80, y + 54),
+           (x + 128, y + 82), (x + 168, y + 112)]
     for (ax, ay), (bx, by) in zip(pts, pts[1:]):
         steps = max(abs(bx - ax), abs(by - ay), 1)
         for i in range(steps + 1):
             px = ax + (bx - ax) * i // steps
             py = ay + (by - ay) * i // steps
             pg.box(px - 2, py - 2, 5, 5, RED)
-    # arrowhead at the end
+    for px, py in pts:
+        pg.disc(px, py, 4, RED)
+        pg.ring(px, py, 4, WHITE, 1)
+    # arrowhead at the end, pointing down and right
     ex, ey = pts[-1]
     pg.tri(ex - 4, ey + 2, 22, 16, RED)
-    # index labels, bottom-left, clear of the falling line
-    pg.draw_text(x + 10, y + h - 42, "NIKKEI -3%", 2, NAVY2)
-    pg.draw_text(x + 10, y + h - 24, "KOSPI -6%", 2, RED)
+    # index legend, bottom-left, clear of the falling line and the strip
+    pg.draw_text(x + 10, y + h - 56, "NIKKEI -3%", 2, NAVY2)
+    pg.draw_text(x + 10, y + h - 38, "KOSPI -6%", 2, RED)
+    # futures strip along the bottom of the chart
+    pg.box(x, y + h - 22, w, 22, (245, 226, 226))
+    pg.hbar(x, y + h - 22, w, RED, 2)
+    pg.draw_centred(x + w // 2, y + h - 15, "US FUTURES SLIDE", 1, RED)
 
 
 def draw_ten_badge(pg, cx, cy, r):
@@ -267,7 +282,7 @@ def build():
     pg.box(lx, ly, lw, 4, RED)
     kicker(pg, lx + 16, ly + 16, "LEAD  -  MARKETS")
     y = pg.headline(lx + 16, ly + 38, lw - 32, "TARIFF SHOCK SINKS ASIAN MARKETS", 5, RED)
-    draw_falling_chart(pg, lx + 16, y + 8, 190, 150)
+    draw_falling_chart(pg, lx + 16, y + 8, 190, 196)
     tx = lx + 222
     yy = pg.body(tx, y + 8,
                  "THE US UNVEILS A NEW TARIFF PLAN AIMED AT FACTORY "
@@ -351,6 +366,7 @@ def build():
     pg.draw_text(44, sy + 44, "REAL MADRID 5-1 PSV", 3, WHITE)
     pg.draw_text(44, sy + 78, "BELLINGHAM STUNNER, MBAPPE BRACE", 2,
                  (200, 210, 230))
+    pg.vbar(512, sy + 14, sh - 28, (60, 80, 120), 2)
     pg.draw_text(532, sy + 14, "CRICKET", 3, GOLD)
     pg.draw_text(532, sy + 44, "IPL AUCTION DRAWS 1,220", 3, WHITE)
     pg.draw_text(532, sy + 78, "GUKESH IN WORLD CHESS TITLE FIGHT", 2,
@@ -366,16 +382,20 @@ def build():
         "NORTH KOREA ORDERS SWITZERLAND TO CLOSE ITS PYONGYANG OFFICE.",
         "SHEIKH HASINA SEEKS RETURN TO BANGLADESH ON DECEMBER 16.",
     ]
-    yy = ay + 38
-    for b in briefs:
-        pg.draw_text(24, yy, "*", 2, RED)
-        pg.draw_text(44, yy, b, 2, INK)
-        yy += 17
+    # numbered briefs in two columns, wrapped so each takes two lines
+    for i, b in enumerate(briefs):
+        cx = 24 if i % 2 == 0 else 516
+        cy = ay + 40 + (i // 2) * 34
+        pg.draw_text(cx, cy, str(i + 1) + ".", 2, RED)
+        pg.body(cx + 28, cy, b, 2, INK, 36, 16)
 
-    pg.draw_text(24, 994,
+    # ---- footer bar ------------------------------------------------------
+    pg.box(0, 992, W, 32, NAVY)
+    pg.box(0, 992, W, 3, GOLD)
+    pg.draw_text(24, 1002,
                  "THURSDAY 26 NOVEMBER 2026  -  AS REPORTED BY REUTERS, "
                  "XINHUA AND OTHERS",
-                 2, GREY)
+                 2, (200, 210, 230))
     return pg
 
 
