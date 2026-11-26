@@ -12,7 +12,7 @@ One image summing up Thursday 26 November 2026's world news: a hand-drawn newspa
 MAKEFUN_OUTPUT_DIR=out python3 main.py
 ```
 
-`main.py` (Python 3, standard library only, no network) draws the 1024×1024 front page with a hand-built 5×7 bitmap typeface and a hand-built PNG writer (zlib + CRC32, no timestamps), so two runs produce byte-identical output, and writes it to `/output/entry.png` (25,755 bytes, well under the 1 MiB cap).
+`main.py` (Python 3, standard library only, no network) draws the 1024×1024 front page with a hand-built 5×7 bitmap typeface and a hand-built PNG writer (zlib + CRC32, no timestamps), so two runs produce byte-identical output, and writes it to `/output/entry.png` (23,887 bytes, well under the 1 MiB cap).
 
 ## The day's news in the image
 

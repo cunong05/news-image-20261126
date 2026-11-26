@@ -1,430 +1,794 @@
 #!/usr/bin/env python3
-"""news-image-20261126 -- one image summing up Thursday 26 November 2026.
+"""THE WORLD TODAY — Thursday 26 November 2026.
 
-Pure Python standard library. Renders a one-page newspaper front page
-(1024x1024) with a hand-built 5x7 bitmap typeface and a hand-built PNG
-writer (zlib + CRC32, no timestamps anywhere), so running it twice writes
-byte-identical files. No network, no files read besides this script.
+A one-page newspaper front page summing up 26 November 2026 world news,
+drawn entirely with Python 3 standard library code: a hand-built 5x7
+bitmap typeface, hand-built PNG encoder (zlib + CRC32), no network,
+deterministic output (two runs are byte-identical).
 
-Run:  MAKEFUN_OUTPUT_DIR=out python3 main.py   (default output: /output)
+Usage:
+    python3 main.py            # writes /output/entry.png
+    MAKEFUN_OUTPUT_DIR=out python3 main.py   # writes out/entry.png
 """
 
 import os
 import struct
 import zlib
+from math import sqrt
 
 W, H = 1024, 1024
 
 # ---------------------------------------------------------------- palette
-PAPER = (250, 247, 238)
-INK = (18, 20, 28)
-NAVY = (13, 32, 66)
-NAVY2 = (24, 52, 96)
-RED = (178, 34, 34)
-GOLD = (201, 162, 39)
-TEAL = (14, 110, 105)
-SKY = (125, 178, 214)
-SEA = (46, 111, 164)
-GREEN = (52, 130, 72)
-GREY = (88, 90, 96)
-LIGHT = (233, 229, 219)
-WHITE = (255, 255, 255)
-CREAM = (255, 251, 235)
-ORANGE = (214, 96, 20)
-SAFFRON = (255, 153, 51)
+PAPER   = (0xFB, 0xF3, 0xDC)   # warm newsprint
+INK     = (0x1B, 0x1B, 0x1B)   # near-black body text
+NAVY    = (0x16, 0x22, 0x4E)   # masthead / sport band / footer
+NAVY_LT = (0x2A, 0x3A, 0x6E)   # lighter navy for rules inside bands
+SLATE   = (0x9A, 0xA0, 0xC0)   # pale slate text on navy
+RED     = (0xB3, 0x27, 0x1E)   # lead red
+GOLD    = (0xC9, 0xA2, 0x27)   # masthead accent
+GOLD_LT = (0xE8, 0xC8, 0x4A)   # pale gold text on navy
+GREY    = (0x6E, 0x6A, 0x5E)   # muted grey text
+TEAL    = (0x0F, 0x7A, 0x6E)   # europe accent
+ORANGE  = (0xD9, 0x6A, 0x1E)   # india accent
+WHITE   = (0xFF, 0xFF, 0xFF)
+BLUE    = (0x1F, 0x5F, 0xB0)   # globe blue
+GREEN   = (0x1E, 0x8A, 0x3C)   # globe green / india green
+SAFFRON = (0xF0, 0x93, 0x1B)   # india saffron
+PINK    = (0xF2, 0xD8, 0xD8)   # futures strip background
 
-# ------------------------------------------------- 5x7 typeface, 35 bits
-# One string of 35 bits per glyph, row-major, 5 bits per row, 7 rows.
-GLYPHS = {
-    "A": "01110100011000111111100011000110001",
-    "B": "11110100011000111110100011000111110",
-    "C": "01110100011000010000100001000101110",
-    "D": "11110100011000110001100011000111110",
-    "E": "11111100001000011110100001000011111",
-    "F": "11111100001000011110100001000010000",
-    "G": "01110100011000010111100011000101111",
-    "H": "10001100011000111111100011000110001",
-    "I": "01110001000010000100001000010001110",
-    "J": "00111000100001000010000101001001100",
-    "K": "10001100101010011000101001001010001",
-    "L": "10000100001000010000100001000011111",
-    "M": "10001110111010110101100011000110001",
-    "N": "10001110011010110011100011000110001",
-    "O": "01110100011000110001100011000101110",
-    "P": "11110100011000111110100001000010000",
-    "Q": "01110100011000110001101011001001101",
-    "R": "11110100011000111110101001001010001",
-    "S": "01111100001000001110000010000111110",
-    "T": "11111001000010000100001000010000100",
-    "U": "10001100011000110001100011000101110",
-    "V": "10001100011000110001100010101000100",
-    "W": "10001100011000110101101011101110001",
-    "X": "10001100010101000100010101000110001",
-    "Y": "10001100010101000100001000010000100",
-    "Z": "11111000010001000100010001000011111",
-    "0": "01110100011001110101110011000101110",
-    "1": "00100011000010000100001000010001110",
-    "2": "01110100010000100110010001000011111",
-    "3": "11110000010000101110000010000111110",
-    "4": "00010001100101010010111110001000010",
-    "5": "11111100001111000001000011000101110",
-    "6": "00110010001000011110100011000101110",
-    "7": "11111000010001000100010000100001000",
-    "8": "01110100011000101110100011000101110",
-    "9": "01110100011000101111000010001001100",
-    " ": "00000000000000000000000000000000000",
-    ".": "00000000000000000000000000110001100",
-    ",": "00000000000000000000011000010001000",
-    "-": "00000000000000001110000000000000000",
-    "'": "00100001000100000000000000000000000",
-    "/": "00001000100001000100010001000010000",
-    "(": "00010001000100001000010000010000010",
-    ")": "01000001000001000010000100010001000",
-    "%": "11001110100001000100010000101110011",
-    "$": "00100011111010001110001011111000100",
-    "&": "01100100101010001000101011001001101",
-    "!": "00100001000010000100001000000000100",
-    "?": "01110100010000100110001000000000100",
-    "+": "00000001000010011111001000010000000",
-    "=": "00000000001111100000111110000000000",
-    ":": "00000011000000001100011000000000000",
-    ";": "00000011000000001100011000010001000",
-    '"': "01010010100101000000000000000000000",
-    "*": "00000101010111010101000000000000000",
-    "<": "00010001000100010000010000010000010",
-    ">": "01000001000001000001000100010001000",
+# ------------------------------------------------------- 5x7 bitmap font
+# Each glyph is 7 rows of 5 cells; '#' is ink, '.' is blank.
+# Written from scratch for this page.
+FONT = {
+    'A': ("..#..",
+          ".#.#.",
+          "#...#",
+          "#...#",
+          "#####",
+          "#...#",
+          "#...#"),
+    'B': ("####.",
+          "#...#",
+          "#...#",
+          "####.",
+          "#...#",
+          "#...#",
+          "####."),
+    'C': (".####",
+          "#....",
+          "#....",
+          "#....",
+          "#....",
+          "#....",
+          ".####"),
+    'D': ("####.",
+          "#...#",
+          "#...#",
+          "#...#",
+          "#...#",
+          "#...#",
+          "####."),
+    'E': ("#####",
+          "#....",
+          "#....",
+          "####.",
+          "#....",
+          "#....",
+          "#####"),
+    'F': ("#####",
+          "#....",
+          "#....",
+          "####.",
+          "#....",
+          "#....",
+          "#...."),
+    'G': (".####",
+          "#....",
+          "#....",
+          "#.###",
+          "#...#",
+          "#...#",
+          ".###."),
+    'H': ("#...#",
+          "#...#",
+          "#...#",
+          "#####",
+          "#...#",
+          "#...#",
+          "#...#"),
+    'I': ("#####",
+          "..#..",
+          "..#..",
+          "..#..",
+          "..#..",
+          "..#..",
+          "#####"),
+    'J': ("..###",
+          "...#.",
+          "...#.",
+          "...#.",
+          "...#.",
+          "#..#.",
+          ".##.."),
+    'K': ("#...#",
+          "#..#.",
+          "#.#..",
+          "##...",
+          "#.#..",
+          "#..#.",
+          "#...#"),
+    'L': ("#....",
+          "#....",
+          "#....",
+          "#....",
+          "#....",
+          "#....",
+          "#####"),
+    'M': ("#...#",
+          "##.##",
+          "#.#.#",
+          "#.#.#",
+          "#...#",
+          "#...#",
+          "#...#"),
 }
 
+FONT.update({
+    'N': ("#...#",
+          "##..#",
+          "#.#.#",
+          "#..##",
+          "#...#",
+          "#...#",
+          "#...#"),
+    'O': (".###.",
+          "#...#",
+          "#...#",
+          "#...#",
+          "#...#",
+          "#...#",
+          ".###."),
+    'P': ("####.",
+          "#...#",
+          "#...#",
+          "####.",
+          "#....",
+          "#....",
+          "#...."),
+    'Q': (".###.",
+          "#...#",
+          "#...#",
+          "#...#",
+          "#.#.#",
+          "#..#.",
+          ".##.#"),
+    'R': ("####.",
+          "#...#",
+          "#...#",
+          "####.",
+          "#.#..",
+          "#..#.",
+          "#...#"),
+    'S': (".####",
+          "#....",
+          "#....",
+          ".###.",
+          "....#",
+          "....#",
+          "####."),
+    'T': ("#####",
+          "..#..",
+          "..#..",
+          "..#..",
+          "..#..",
+          "..#..",
+          "..#.."),
+    'U': ("#...#",
+          "#...#",
+          "#...#",
+          "#...#",
+          "#...#",
+          "#...#",
+          ".###."),
+    'V': ("#...#",
+          "#...#",
+          "#...#",
+          "#...#",
+          "#...#",
+          ".#.#.",
+          "..#.."),
+    'W': ("#...#",
+          "#...#",
+          "#...#",
+          "#.#.#",
+          "#.#.#",
+          "##.##",
+          "#...#"),
+    'X': ("#...#",
+          "#...#",
+          ".#.#.",
+          "..#..",
+          ".#.#.",
+          "#...#",
+          "#...#"),
+    'Y': ("#...#",
+          "#...#",
+          ".#.#.",
+          "..#..",
+          "..#..",
+          "..#..",
+          "..#.."),
+    'Z': ("#####",
+          "....#",
+          "...#.",
+          "..#..",
+          ".#...",
+          "#....",
+          "#####"),
+    '0': (".###.",
+          "#...#",
+          "#..##",
+          "#.#.#",
+          "##..#",
+          "#...#",
+          ".###."),
+    '1': ("..#..",
+          ".##..",
+          "..#..",
+          "..#..",
+          "..#..",
+          "..#..",
+          ".###."),
+    '2': (".###.",
+          "#...#",
+          "....#",
+          "...#.",
+          "..#..",
+          ".#...",
+          "#####"),
+    '3': ("####.",
+          "....#",
+          "....#",
+          ".###.",
+          "....#",
+          "....#",
+          "####."),
+    '4': ("...#.",
+          "..##.",
+          ".#.#.",
+          "#..#.",
+          "#####",
+          "...#.",
+          "...#."),
+    '5': ("#####",
+          "#....",
+          "####.",
+          "....#",
+          "....#",
+          "#...#",
+          ".###."),
+    '6': (".###.",
+          "#....",
+          "#....",
+          "####.",
+          "#...#",
+          "#...#",
+          ".###."),
+    '7': ("#####",
+          "....#",
+          "...#.",
+          "..#..",
+          "..#..",
+          "..#..",
+          "..#.."),
+    '8': (".###.",
+          "#...#",
+          "#...#",
+          ".###.",
+          "#...#",
+          "#...#",
+          ".###."),
+    '9': (".###.",
+          "#...#",
+          "#...#",
+          ".####",
+          "....#",
+          "....#",
+          ".###."),
+    ' ': (".....",
+          ".....",
+          ".....",
+          ".....",
+          ".....",
+          ".....",
+          "....."),
+    '-': (".....",
+          ".....",
+          ".....",
+          ".###.",
+          ".....",
+          ".....",
+          "....."),
+    '.': (".....",
+          ".....",
+          ".....",
+          ".....",
+          ".....",
+          ".##..",
+          ".##.."),
+    ',': (".....",
+          ".....",
+          ".....",
+          ".....",
+          ".##..",
+          ".##..",
+          ".#..."),
+    '%': ("#...#",
+          "#..#.",
+          "...#.",
+          "..#..",
+          ".#...",
+          "#..#.",
+          "#...#"),
+    '$': ("..#..",
+          ".####",
+          "#.#.#",
+          ".###.",
+          "..#.#",
+          "####.",
+          "..#.."),
+    '/': ("....#",
+          "....#",
+          "...#.",
+          "..#..",
+          ".#...",
+          "#....",
+          "#...."),
+    ':': (".....",
+          ".##..",
+          ".##..",
+          ".....",
+          ".##..",
+          ".##..",
+          "....."),
+    ';': (".....",
+          ".##..",
+          ".##..",
+          ".....",
+          ".##..",
+          ".##..",
+          ".#..."),
+    '(': ("...#.",
+          "..#..",
+          ".#...",
+          ".#...",
+          ".#...",
+          "..#..",
+          "...#."),
+    ')': (".#...",
+          "..#..",
+          "...#.",
+          "...#.",
+          "...#.",
+          "..#..",
+          ".#..."),
+    '+': (".....",
+          "..#..",
+          "..#..",
+          ".###.",
+          "..#..",
+          "..#..",
+          "....."),
+    '!': ("..#..",
+          "..#..",
+          "..#..",
+          "..#..",
+          "..#..",
+          ".....",
+          "..#.."),
+    '?': (".###.",
+          "#...#",
+          "....#",
+          "...#.",
+          "..#..",
+          ".....",
+          "..#.."),
+    '=': (".....",
+          ".....",
+          ".####",
+          ".....",
+          ".####",
+          ".....",
+          "....."),
+    '&': (".##..",
+          "#..#.",
+          "#.#..",
+          ".#...",
+          "#.#.#",
+          "#..#.",
+          ".##.#"),
+    "'": ("..#..",
+          "..#..",
+          ".#...",
+          ".....",
+          ".....",
+          ".....",
+          "....."),
+})
 
-def glyph_rows(ch):
-    bits = GLYPHS.get(ch, GLYPHS["?"])
-    return [bits[i * 5:(i + 1) * 5] for i in range(7)]
+# ------------------------------------------------------------------ canvas
+class Page:
+    """An RGB bitmap with drawing helpers."""
+
+    def __init__(self):
+        self.buf = bytearray(PAPER * (W * H))
+
+    def put(self, x, y, colour):
+        if 0 <= x < W and 0 <= y < H:
+            i = (y * W + x) * 3
+            self.buf[i:i + 3] = bytes(colour)
+
+    def rect(self, x, y, w, h, colour):
+        x0, y0 = max(0, x), max(0, y)
+        x1, y1 = min(W, x + w), min(H, y + h)
+        row = bytes(colour) * (x1 - x0)
+        for yy in range(y0, y1):
+            i = (yy * W + x0) * 3
+            self.buf[i:i + len(row)] = row
+
+    def hline(self, x, y, w, colour, thick=1):
+        self.rect(x, y, w, thick, colour)
+
+    def vline(self, x, y, h, colour, thick=1):
+        self.rect(x, y, thick, h, colour)
+
+    def line(self, x0, y0, x1, y1, colour):
+        """Bresenham line."""
+        dx = abs(x1 - x0)
+        dy = -abs(y1 - y0)
+        sx = 1 if x0 < x1 else -1
+        sy = 1 if y0 < y1 else -1
+        err = dx + dy
+        while True:
+            self.put(x0, y0, colour)
+            if x0 == x1 and y0 == y1:
+                break
+            e2 = 2 * err
+            if e2 >= dy:
+                err += dy
+                x0 += sx
+            if e2 <= dx:
+                err += dx
+                y0 += sy
+
+    def disc(self, cx, cy, r, colour):
+        """Filled disc."""
+        for dy in range(-r, r + 1):
+            half = int(sqrt(r * r - dy * dy))
+            self.rect(cx - half, cy + dy, 2 * half + 1, 1, colour)
+
+    def ring(self, cx, cy, r, colour, thick=2):
+        self.disc(cx, cy, r, colour)
+        self.disc(cx, cy, r - thick, PAPER)
+
+    def triangle(self, x, y, w, h, colour):
+        """Right-pointing filled triangle with tip at (x+w, y+h//2)."""
+        for i in range(w):
+            span = int(h * (i + 1) / w)
+            self.rect(x + i, y + (h - span) // 2, 1, span, colour)
+
+# -------------------------------------------------------------------- text
+def char_w(scale):
+    return 6 * scale
 
 
-def measure(text, scale):
-    return len(text) * 6 * scale - scale
+def text_w(text, scale):
+    return len(text) * char_w(scale) - scale if text else 0
 
 
-def wrap_words(text, max_chars):
-    lines, cur = [], ""
-    for word in text.split():
-        trial = word if not cur else cur + " " + word
-        if len(trial) <= max_chars:
-            cur = trial
-        else:
-            if cur:
+def draw_glyph(page, x, y, ch, scale, colour):
+    glyph = FONT.get(ch.upper(), FONT['?'])
+    for row_i, row in enumerate(glyph):
+        for col_i, cell in enumerate(row):
+            if cell == '#':
+                page.rect(x + col_i * scale, y + row_i * scale,
+                          scale, scale, colour)
+
+
+def draw_text(page, x, y, text, scale, colour):
+    cx = x
+    for ch in text:
+        draw_glyph(page, cx, y, ch, scale, colour)
+        cx += char_w(scale)
+    return cx
+
+
+def draw_centred(page, cx, y, text, scale, colour):
+    draw_text(page, cx - text_w(text, scale) // 2, y, text, scale, colour)
+
+
+def wrap_lines(text, scale, max_w):
+    """Greedy word wrap; returns a list of lines."""
+    lines = []
+    for chunk in text.split('\n'):
+        words = chunk.split()
+        cur = ''
+        for word in words:
+            trial = word if not cur else cur + ' ' + word
+            if text_w(trial, scale) <= max_w or not cur:
+                cur = trial
+            else:
                 lines.append(cur)
-            cur = word
-    if cur:
-        lines.append(cur)
+                cur = word
+        if cur:
+            lines.append(cur)
     return lines
 
 
-# ------------------------------------------------------------------- page
-class Page:
-    def __init__(self, w, h, bg):
-        self.w, self.h = w, h
-        self.buf = bytearray(bg * (w * h))
-
-    def put(self, x, y, color):
-        if 0 <= x < self.w and 0 <= y < self.h:
-            i = (y * self.w + x) * 3
-            self.buf[i:i + 3] = bytes(color)
-
-    def box(self, x, y, w, h, color):
-        x0, y0 = max(0, x), max(0, y)
-        x1, y1 = min(self.w, x + w), min(self.h, y + h)
-        for yy in range(y0, y1):
-            base = (yy * self.w + x0) * 3
-            self.buf[base:base + (x1 - x0) * 3] = bytes(color) * (x1 - x0)
-
-    def hbar(self, x, y, w, color, thick=1):
-        self.box(x, y, w, thick, color)
-
-    def vbar(self, x, y, h, color, thick=1):
-        self.box(x, y, thick, h, color)
-
-    def disc(self, cx, cy, r, color):
-        for yy in range(-r, r + 1):
-            dx = int((r * r - yy * yy) ** 0.5)
-            for xx in range(-dx, dx + 1):
-                self.put(cx + xx, cy + yy, color)
-
-    def ring(self, cx, cy, r, color, thick=3):
-        for yy in range(-r - 1, r + 2):
-            for xx in range(-r - 1, r + 2):
-                d = (xx * xx + yy * yy) ** 0.5
-                if r - thick <= d <= r:
-                    self.put(cx + xx, cy + yy, color)
-
-    def tri(self, x, y, w, h, color):
-        for yy in range(h):
-            span = int(w * (yy + 1) / h)
-            x0 = x + (w - span) // 2
-            self.box(x0, y + yy, span, 1, color)
-
-    def draw_text(self, x, y, s, scale, color):
-        cx = x
-        for ch in s.upper():
-            for row in range(7):
-                bits = glyph_rows(ch)[row]
-                for col in range(5):
-                    if bits[col] == "1":
-                        self.box(cx + col * scale, y + row * scale,
-                                 scale, scale, color)
-            cx += 6 * scale
-        return cx
-
-    def draw_centred(self, cx, y, s, scale, color):
-        self.draw_text(cx - measure(s, scale) // 2, y, s, scale, color)
-
-    def headline(self, x, y, w, title, scale, color=INK):
-        chars = max(6, w // (6 * scale))
-        yy = y
-        for line in wrap_words(title, chars):
-            self.draw_text(x, yy, line, scale, color)
-            yy += 7 * scale + 4
-        return yy
-
-    def body(self, x, y, s, scale, color, max_chars, leading):
-        yy = y
-        for line in wrap_words(s, max_chars):
-            self.draw_text(x, yy, line, scale, color)
-            yy += leading
-        return yy
+def draw_para(page, x, y, text, scale, colour, max_w, leading=None):
+    """Draw a wrapped paragraph; returns the y below the last line."""
+    if leading is None:
+        leading = 7 * scale + 4
+    for line in wrap_lines(text, scale, max_w):
+        draw_text(page, x, y, line, scale, colour)
+        y += leading
+    return y
 
 
-# -------------------------------------------------------------- pictograms
-def draw_falling_chart(pg, x, y, w, h):
-    """Share-price chart falling off a cliff, with axes and a futures strip.
-
-    A labelled percentage axis (0% / -3% / -6%) on the left, light grid
-    lines, red dots marking each data point on the falling line, an
-    arrowhead at the end, an index legend, and a strip at the bottom
-    noting that US futures slid ahead of Thanksgiving.
-    """
-    pg.box(x, y, w, h, WHITE)
-    pg.box(x, y, w, 3, INK)
-    # percentage axis: labels on the left, grid lines across
-    axis = [("0%", 24), ("-3%", 64), ("-6%", 104)]
-    for label, dy in axis:
-        pg.draw_text(x + 4, y + dy, label, 1, NAVY2)
-        pg.hbar(x + 26, y + dy + 6, w - 34, (220, 222, 226), 1)
-    # descending line: four points, steeper each time, dots on each point
-    pts = [(x + 32, y + 30), (x + 80, y + 54),
-           (x + 128, y + 82), (x + 168, y + 112)]
-    for (ax, ay), (bx, by) in zip(pts, pts[1:]):
-        steps = max(abs(bx - ax), abs(by - ay), 1)
-        for i in range(steps + 1):
-            px = ax + (bx - ax) * i // steps
-            py = ay + (by - ay) * i // steps
-            pg.box(px - 2, py - 2, 5, 5, RED)
-    for px, py in pts:
-        pg.disc(px, py, 4, RED)
-        pg.ring(px, py, 4, WHITE, 1)
-    # arrowhead at the end, pointing down and right
-    ex, ey = pts[-1]
-    pg.tri(ex - 4, ey + 2, 22, 16, RED)
-    # index legend, bottom-left, clear of the falling line and the strip
-    pg.draw_text(x + 10, y + h - 56, "NIKKEI -3%", 2, NAVY2)
-    pg.draw_text(x + 10, y + h - 38, "KOSPI -6%", 2, RED)
-    # futures strip along the bottom of the chart
-    pg.box(x, y + h - 22, w, 22, (245, 226, 226))
-    pg.hbar(x, y + h - 22, w, RED, 2)
-    pg.draw_centred(x + w // 2, y + h - 15, "US FUTURES SLIDE", 1, RED)
+def kicker(page, x, y, label, colour):
+    """Small section label with a solid square bullet."""
+    page.rect(x, y + 2, 10, 10, colour)
+    draw_text(page, x + 16, y, label, 2, colour)
+    return y + 16
 
 
-def draw_ten_badge(pg, cx, cy, r):
-    pg.disc(cx, cy, r, GOLD)
-    pg.ring(cx, cy, r, NAVY, 3)
-    pg.draw_centred(cx, cy - 11, "10", 3, NAVY)
+# -------------------------------------------------------------- PNG output
+def _chunk(kind, data):
+    body = kind + data
+    return (struct.pack('>I', len(data)) + body +
+            struct.pack('>I', zlib.crc32(body) & 0xFFFFFFFF))
 
 
-def draw_tricolour(pg, x, y, w, h):
-    pg.box(x, y, w, h // 3, SAFFRON)
-    pg.box(x, y + h // 3, w, h // 3, WHITE)
-    pg.box(x, y + 2 * h // 3, w, h - 2 * h // 3, GREEN)
-    pg.ring(x + w // 2, y + h // 2, h // 6, NAVY2, 2)
-
-
-def draw_globe(pg, cx, cy, r):
-    pg.disc(cx, cy, r, SEA)
-    pg.disc(cx - r // 3, cy - r // 4, r // 4, GREEN)
-    pg.disc(cx + r // 4, cy + r // 5, r // 5, GREEN)
-    pg.disc(cx + r // 10, cy - r // 2, r // 6, GREEN)
-    pg.ring(cx, cy, r, WHITE, 2)
-    for k in range(-2, 3):
-        pg.vbar(cx + k * r // 3, cy - r + 4, 2 * r - 8, (210, 225, 240), 1)
-    pg.hbar(cx - r + 4, cy, 2 * r - 8, (210, 225, 240), 1)
-
-
-# ------------------------------------------------------------------ layout
-def kicker(pg, x, y, label, color=RED):
-    pg.box(x, y, 10, 10, color)
-    pg.draw_text(x + 16, y - 1, label, 2, color)
-
-
-def build():
-    pg = Page(W, H, PAPER)
-
-    # ---- masthead ------------------------------------------------------
-    pg.box(0, 0, W, 118, NAVY)
-    pg.box(0, 118, W, 5, GOLD)
-    pg.draw_text(24, 18, "THE WORLD TODAY", 6, WHITE)
-    pg.draw_text(24, 66, "ONE DAY  -  ONE PAGE  -  THE NEWS THAT MATTERED", 2, GOLD)
-    pg.draw_text(700, 22, "THURSDAY", 4, WHITE)
-    pg.draw_text(700, 58, "26 NOVEMBER 2026", 3, GOLD)
-    pg.draw_text(700, 92, "WORLD NEWS IN ONE IMAGE", 2, (180, 195, 220))
-
-    # ---- LEAD: tariff shock --------------------------------------------
-    lx, ly, lw, lh = 24, 134, 600, 336
-    pg.box(lx, ly, lw, lh, CREAM)
-    pg.box(lx, ly, lw, 4, RED)
-    kicker(pg, lx + 16, ly + 16, "LEAD  -  MARKETS")
-    y = pg.headline(lx + 16, ly + 38, lw - 32, "TARIFF SHOCK SINKS ASIAN MARKETS", 5, RED)
-    draw_falling_chart(pg, lx + 16, y + 8, 190, 196)
-    tx = lx + 222
-    yy = pg.body(tx, y + 8,
-                 "THE US UNVEILS A NEW TARIFF PLAN AIMED AT FACTORY "
-                 "OVERCAPACITY IN 16 TRADING PARTNERS. SEOUL FALLS 6%, "
-                 "TOKYO 3%, AND US FUTURES SLIDE AS INVESTORS BRACE FOR "
-                 "HIGHER PRICES AND A SLOWER ECONOMY.",
-                 2, INK, 30, 19)
-    pg.body(tx, yy + 10,
-            "THE PLAN LANDS DAYS AFTER A DEMOCRATIC MIDTERM WIN AND "
-            "JUST BEFORE THANKSGIVING.",
-            2, GREY, 30, 19)
-
-    # ---- right column: space + EU summit --------------------------------
-    rx, rw = 640, 360
-    # space
-    ry, rh = 134, 168
-    pg.box(rx, ry, rw, rh, WHITE)
-    pg.box(rx, ry, rw, 4, NAVY2)
-    kicker(pg, rx + 12, ry + 12, "SPACE  -  CHINA")
-    y = pg.headline(rx + 12, ry + 32, rw - 24,
-                    "FIRST PAKISTANI IN ORBIT", 3)
-    pg.body(rx + 12, y + 4,
-            "SHENZHOU-24 DOCKS AT TIANGONG. ZEESHAN ALI IS THE FIRST "
-            "FOREIGN VISITOR TO CHINA'S STATION.",
-            2, INK, 28, 18)
-    # EU summit
-    ry2, rh2 = 310, 160
-    pg.box(rx, ry2, rw, rh2, WHITE)
-    pg.box(rx, ry2, rw, 4, TEAL)
-    kicker(pg, rx + 12, ry2 + 12, "EUROPE  -  BRUSSELS")
-    y = pg.headline(rx + 12, ry2 + 32, rw - 24,
-                    "EU LEADERS MEET IN BRUSSELS", 3)
-    pg.body(rx + 12, y + 4,
-            "A EURO SUMMIT AND A SPECIAL EUROPEAN COUNCIL OPEN IN "
-            "BRUSSELS, WITH TRADE AND DEFENCE ON THE AGENDA.",
-            2, INK, 28, 18)
-
-    # ---- middle row: three stories --------------------------------------
-    my, mh = 486, 246
-    # Colombia
-    x, w = 24, 320
-    pg.box(x, my, w, mh, WHITE)
-    pg.box(x, my, w, 4, GOLD)
-    kicker(pg, x + 12, my + 12, "PEACE  -  COLOMBIA", GOLD)
-    y = pg.headline(x + 12, my + 32, w - 24, "10 YEARS OF PEACE", 3)
-    pg.body(x + 12, y + 4,
-            "COLOMBIA MARKS A DECADE SINCE ITS HISTORIC PEACE ACCORD. "
-            "THE UN CHIEF PRAISES PROGRESS BUT WARNS OF UNFINISHED "
-            "COMMITMENTS.",
-            2, INK, 21, 18)
-    draw_ten_badge(pg, x + w - 44, my + mh - 44, 30)
-    # India
-    x, w = 360, 320
-    pg.box(x, my, w, mh, WHITE)
-    pg.box(x, my, w, 4, ORANGE)
-    kicker(pg, x + 12, my + 12, "INDIA  -  CONSTITUTION DAY", ORANGE)
-    y = pg.headline(x + 12, my + 32, w - 24,
-                    "INDIA MARKS CONSTITUTION DAY", 3)
-    pg.body(x + 12, y + 4,
-            "NOVEMBER 26 IS SAMVIDHAN DIVAS. IITS WILL ADD 6,000 SEATS "
-            "IN ROBOTICS, AI AND SPACE TECHNOLOGY FROM 2027.",
-            2, INK, 23, 18)
-    draw_tricolour(pg, x + w - 66, my + mh - 40, 54, 28)
-    # Venezuela
-    x, w = 696, 304
-    pg.box(x, my, w, mh, WHITE)
-    pg.box(x, my, w, 4, RED)
-    kicker(pg, x + 12, my + 12, "ECONOMY  -  VENEZUELA", RED)
-    y = pg.headline(x + 12, my + 32, w - 24,
-                    "VENEZUELA REVEALS $237.5BN DEBT", 3)
-    pg.body(x + 12, y + 4,
-            "THE GOVERNMENT PUTS PUBLIC DEBT AT $237.5 BILLION AS IT "
-            "PREPARES A HISTORIC ECONOMIC RESTRUCTURE.",
-            2, INK, 22, 18)
-    draw_globe(pg, x + w - 46, my + mh - 48, 32)
-
-    # ---- sport band ------------------------------------------------------
-    sy, sh = 748, 118
-    pg.box(24, sy, 976, sh, NAVY)
-    pg.draw_text(44, sy + 14, "SPORT", 3, GOLD)
-    pg.draw_text(44, sy + 44, "REAL MADRID 5-1 PSV", 3, WHITE)
-    pg.draw_text(44, sy + 78, "BELLINGHAM STUNNER, MBAPPE BRACE", 2,
-                 (200, 210, 230))
-    pg.vbar(512, sy + 14, sh - 28, (60, 80, 120), 2)
-    pg.draw_text(532, sy + 14, "CRICKET", 3, GOLD)
-    pg.draw_text(532, sy + 44, "IPL AUCTION DRAWS 1,220", 3, WHITE)
-    pg.draw_text(532, sy + 78, "GUKESH IN WORLD CHESS TITLE FIGHT", 2,
-                 (200, 210, 230))
-
-    # ---- also-today strip ------------------------------------------------
-    ay = 882
-    pg.draw_text(24, ay, "ALSO TODAY", 3, RED)
-    pg.hbar(24, ay + 28, 976, INK, 2)
-    briefs = [
-        "MUMBAI MARKS 18 YEARS SINCE THE 26/11 ATTACKS.",
-        "BANGLADESH RAISES GARMENT WORKERS' MINIMUM WAGE BY 36%.",
-        "NORTH KOREA ORDERS SWITZERLAND TO CLOSE ITS PYONGYANG OFFICE.",
-        "SHEIKH HASINA SEEKS RETURN TO BANGLADESH ON DECEMBER 16.",
-    ]
-    # numbered briefs in two columns, wrapped so each takes two lines
-    for i, b in enumerate(briefs):
-        cx = 24 if i % 2 == 0 else 516
-        cy = ay + 40 + (i // 2) * 34
-        pg.draw_text(cx, cy, str(i + 1) + ".", 2, RED)
-        pg.body(cx + 28, cy, b, 2, INK, 36, 16)
-
-    # ---- footer bar ------------------------------------------------------
-    pg.box(0, 992, W, 32, NAVY)
-    pg.box(0, 992, W, 3, GOLD)
-    pg.draw_text(24, 1002,
-                 "THURSDAY 26 NOVEMBER 2026  -  AS REPORTED BY REUTERS, "
-                 "XINHUA AND OTHERS",
-                 2, (200, 210, 230))
-    return pg
-
-
-# ------------------------------------------------------------------- PNG
-def png_chunk(tag, payload):
-    out = struct.pack(">I", len(payload)) + tag + payload
-    return out + struct.pack(">I", zlib.crc32(tag + payload) & 0xFFFFFFFF)
-
-
-def encode_png(pg):
+def encode_png(page):
+    ihdr = struct.pack('>IIBBBBB', W, H, 8, 2, 0, 0, 0)
     raw = bytearray()
-    for y in range(pg.h):
-        raw.append(0)
-        raw += pg.buf[y * pg.w * 3:(y + 1) * pg.w * 3]
-    png = b"\x89PNG\r\n\x1a\n"
-    png += png_chunk(b"IHDR", struct.pack(">IIBBBBB", pg.w, pg.h, 8, 2, 0, 0, 0))
-    png += png_chunk(b"IDAT", zlib.compress(bytes(raw), 9))
-    png += png_chunk(b"IEND", b"")
-    return png
+    stride = W * 3
+    for yy in range(H):
+        raw.append(0)  # filter: none
+        raw += page.buf[yy * stride:(yy + 1) * stride]
+    idat = zlib.compress(bytes(raw), 9)
+    return (b'\x89PNG\r\n\x1a\n' + _chunk(b'IHDR', ihdr) +
+            _chunk(b'IDAT', idat) + _chunk(b'IEND', b''))
+
+
+# ------------------------------------------------------------- chart block
+def draw_falling_chart(page, x, y, w, h):
+    """Lead chart: a steeply falling line with % axis labels."""
+    page.rect(x, y, w, h, WHITE)
+    page.rect(x, y, w, 2, INK)
+    page.rect(x, y, 2, h, INK)
+    # axis labels and gridlines: 0% at top, -3% mid, -6% bottom
+    top = y + 14
+    mid = y + h // 2
+    bot = y + h - 22
+    for label, yy in (("0%", top), ("-3%", mid), ("-6%", bot)):
+        draw_text(page, x + 6, yy - 7, label, 1, GREY)
+        page.hline(x + 34, yy, w - 40, (0xD8, 0xD2, 0xC2))
+    # falling polyline through five points
+    xs = [x + 44, x + 44 + (w - 90) // 4, x + 44 + (w - 90) // 2,
+          x + 44 + 3 * (w - 90) // 4, x + w - 34]
+    ys = [top + 6, top + 26, mid + 4, bot - 22, bot - 4]
+    for i in range(len(xs) - 1):
+        page.line(xs[i], ys[i], xs[i + 1], ys[i + 1], RED)
+        page.line(xs[i], ys[i] + 1, xs[i + 1], ys[i + 1] + 1, RED)
+    for px, py in zip(xs, ys):
+        page.disc(px, py, 4, RED)
+        page.disc(px, py, 2, WHITE)
+    # arrowhead at the end of the fall
+    page.triangle(xs[-1] - 2, ys[-1] - 12, 20, 24, RED)
+    # legend
+    draw_text(page, x + 6, y + h - 40, "NIKKEI -3%", 2, BLUE)
+    draw_text(page, x + 6, y + h - 20, "KOSPI -6%", 2, RED)
+    # futures strip
+    page.rect(x, y + h + 6, w, 22, PINK)
+    draw_centred(page, x + w // 2, y + h + 11, "US FUTURES SLIDE", 1, RED)
+
+
+# -------------------------------------------------------------- masthead
+def draw_masthead(page):
+    page.rect(0, 0, W, 108, NAVY)
+    draw_text(page, 24, 22, "THE WORLD TODAY", 5, WHITE)
+    draw_text(page, 24, 70, "ONE DAY - ONE PAGE - THE NEWS THAT MATTERED",
+              2, GOLD_LT)
+    # right-hand date block, right-aligned to x=1000
+    draw_text(page, 1000 - text_w("THURSDAY", 4), 20, "THURSDAY", 4, WHITE)
+    draw_text(page, 1000 - text_w("26 NOVEMBER 2026", 4), 52,
+              "26 NOVEMBER 2026", 4, GOLD_LT)
+    draw_text(page, 1000 - text_w("WORLD NEWS IN ONE IMAGE", 2), 84,
+              "WORLD NEWS IN ONE IMAGE", 2, SLATE)
+    page.rect(0, 108, W, 4, GOLD)
+
+
+# -------------------------------------------------------------- top row
+def draw_lead(page):
+    x, y = 24, 126
+    kicker(page, x, y, "LEAD - MARKETS", RED)
+    draw_text(page, x, y + 26, "TARIFF SHOCK SINKS", 4, RED)
+    draw_text(page, x, y + 58, "ASIAN MARKETS", 4, RED)
+    chart_x, chart_y = x, y + 104
+    draw_falling_chart(page, chart_x, chart_y, 212, 190)
+    body_x = x + 228
+    body_w = 600 - body_x
+    end = draw_para(
+        page, body_x, chart_y,
+        "THE US UNVEILS A NEW TARIFF PLAN AIMED AT FACTORY "
+        "OVERCAPACITY IN 16 TRADING PARTNERS. SEOUL FALLS 6%, "
+        "TOKYO 3%, AND US FUTURES SLIDE AS INVESTORS BRACE FOR "
+        "HIGHER PRICES AND A SLOWER ECONOMY.",
+        2, INK, body_w)
+    draw_para(
+        page, body_x, end + 10,
+        "THE PLAN LANDS DAYS AFTER A DEMOCRATIC MIDTERM WIN AND "
+        "JUST BEFORE THANKSGIVING.",
+        2, INK, body_w)
+
+
+def draw_space_europe(page):
+    x, y = 624, 126
+    col_w = 1000 - x
+    kicker(page, x, y, "SPACE - CHINA", RED)
+    draw_text(page, x, y + 26, "FIRST PAKISTANI IN", 3, INK)
+    draw_text(page, x, y + 50, "ORBIT", 3, INK)
+    draw_para(
+        page, x, y + 82,
+        "SHENZHOU-24 DOCKS AT TIANGONG. ZEESHAN ALI IS THE FIRST "
+        "FOREIGN VISITOR TO CHINA'S STATION.",
+        2, INK, col_w)
+    page.hline(x, y + 176, col_w, TEAL, 3)
+    kicker(page, x, y + 188, "EUROPE - BRUSSELS", TEAL)
+    draw_text(page, x, y + 214, "EU LEADERS MEET IN", 3, INK)
+    draw_text(page, x, y + 238, "BRUSSELS", 3, INK)
+    draw_para(
+        page, x, y + 270,
+        "A EURO SUMMIT AND A SPECIAL EUROPEAN COUNCIL OPEN IN "
+        "BRUSSELS, WITH TRADE AND DEFENCE ON THE AGENDA.",
+        2, INK, col_w)
+
+
+# ------------------------------------------------------------ middle row
+def draw_peace(page):
+    x, y = 24, 532
+    col_w = 312
+    page.hline(x, y - 8, col_w, GOLD, 3)
+    kicker(page, x, y, "PEACE - COLOMBIA", GOLD)
+    draw_text(page, x, y + 26, "10 YEARS OF", 3, INK)
+    draw_text(page, x, y + 50, "PEACE", 3, INK)
+    draw_para(
+        page, x, y + 82,
+        "COLOMBIA MARKS A DECADE SINCE ITS HISTORIC PEACE ACCORD. "
+        "THE UN CHIEF PRAISES PROGRESS BUT WARNS OF UNFINISHED "
+        "COMMITMENTS.",
+        2, INK, col_w)
+    # anniversary badge: gold disc with a big 10, beside the headline
+    page.disc(x + 262, y + 40, 26, GOLD)
+    page.disc(x + 262, y + 40, 22, NAVY)
+    draw_text(page, x + 244, y + 28, "10", 3, GOLD_LT)
+
+
+def draw_india(page):
+    x, y = 352, 532
+    col_w = 312
+    page.hline(x, y - 8, col_w, ORANGE, 3)
+    kicker(page, x, y, "INDIA - CONSTITUTION DAY", ORANGE)
+    draw_text(page, x, y + 26, "INDIA MARKS", 3, INK)
+    draw_text(page, x, y + 50, "CONSTITUTION DAY", 3, INK)
+    draw_para(
+        page, x, y + 82,
+        "NOVEMBER 26 IS SAMVIDHAN DIVAS. IITS WILL ADD 6,000 "
+        "SEATS IN ROBOTICS, AI AND SPACE TECHNOLOGY FROM 2027.",
+        2, INK, col_w)
+    # tricolour bars
+    bar_y = y + 178
+    page.rect(x, bar_y, 150, 10, SAFFRON)
+    page.rect(x, bar_y + 10, 150, 10, WHITE)
+    page.rect(x, bar_y + 20, 150, 10, GREEN)
+    page.disc(x + 75, bar_y + 15, 6, NAVY)
+
+
+def draw_venezuela(page):
+    x, y = 680, 532
+    col_w = 320
+    page.hline(x, y - 8, col_w, RED, 3)
+    kicker(page, x, y, "ECONOMY - VENEZUELA", RED)
+    draw_text(page, x, y + 26, "VENEZUELA", 3, INK)
+    draw_text(page, x, y + 50, "REVEALS", 3, INK)
+    draw_text(page, x, y + 74, "$237.5BN DEBT", 3, INK)
+    draw_para(
+        page, x, y + 106,
+        "THE GOVERNMENT PUTS PUBLIC DEBT AT $237.5 BILLION AS IT "
+        "PREPARES A HISTORIC ECONOMIC RESTRUCTURE.",
+        2, INK, col_w)
+    # globe: blue disc with green land and white grid, clear of the body
+    cx, cy = x + 282, y + 200
+    page.disc(cx, cy, 30, BLUE)
+    page.disc(cx - 10, cy - 8, 10, GREEN)
+    page.disc(cx + 12, cy + 10, 8, GREEN)
+    page.vline(cx, cy - 30, 60, WHITE)
+    page.hline(cx - 30, cy, 60, WHITE)
+
+
+# -------------------------------------------------------------- sport band
+def draw_sport(page):
+    y = 772
+    page.rect(0, y, W, 96, NAVY)
+    draw_text(page, 24, y + 12, "SPORT", 2, GOLD_LT)
+    draw_text(page, 24, y + 36, "REAL MADRID 5-1 PSV", 3, WHITE)
+    draw_text(page, 24, y + 66, "BELLINGHAM STUNNER, MBAPPE BRACE", 2, WHITE)
+    page.vline(512, y + 12, 72, NAVY_LT, 2)
+    draw_text(page, 536, y + 12, "CRICKET", 2, GOLD_LT)
+    draw_text(page, 536, y + 36, "IPL AUCTION DRAWS 1,220", 3, WHITE)
+    draw_text(page, 536, y + 66, "GUKESH IN WORLD CHESS TITLE FIGHT", 2, WHITE)
+
+
+# -------------------------------------------------------------- also today
+def draw_also_today(page):
+    y = 884
+    draw_text(page, 24, y, "ALSO TODAY", 3, RED)
+    page.hline(24, y + 28, 976, INK, 2)
+    left = [
+        ("1.", "MUMBAI MARKS 18 YEARS SINCE THE 26/11 ATTACKS."),
+        ("3.", "NORTH KOREA ORDERS SWITZERLAND TO CLOSE ITS "
+              "PYONGYANG OFFICE."),
+    ]
+    right = [
+        ("2.", "BANGLADESH RAISES GARMENT WORKERS MINIMUM WAGE "
+              "BY 36%."),
+        ("4.", "SHEIKH HASINA SEEKS RETURN TO BANGLADESH ON "
+              "DECEMBER 16."),
+    ]
+    for col_x, items in ((24, left), (524, right)):
+        yy = y + 40
+        for num, text in items:
+            draw_text(page, col_x, yy, num, 2, RED)
+            draw_para(page, col_x + 28, yy, text, 2, INK, 448, leading=16)
+            yy += 34
+
+
+# ------------------------------------------------------------------ footer
+def draw_footer(page):
+    page.rect(0, 990, W, 34, NAVY)
+    page.rect(0, 990, W, 3, GOLD)
+    draw_centred(
+        page, W // 2, 1002,
+        "THURSDAY 26 NOVEMBER 2026 - AS REPORTED BY REUTERS, "
+        "XINHUA AND OTHERS",
+        2, WHITE)
+
+
+# -------------------------------------------------------------------- main
+def build_page():
+    page = Page()
+    draw_masthead(page)
+    draw_lead(page)
+    draw_space_europe(page)
+    page.hline(24, 520, 976, INK, 2)
+    draw_peace(page)
+    draw_india(page)
+    draw_venezuela(page)
+    draw_sport(page)
+    draw_also_today(page)
+    draw_footer(page)
+    return page
 
 
 def main():
     out_dir = os.environ.get("MAKEFUN_OUTPUT_DIR", "/output")
     os.makedirs(out_dir, exist_ok=True)
-    data = encode_png(build())
+    data = encode_png(build_page())
     path = os.path.join(out_dir, "entry.png")
-    with open(path, "wb") as f:
-        f.write(data)
-    print(f"wrote {path} ({len(data)} bytes, {W}x{H})")
+    with open(path, "wb") as fh:
+        fh.write(data)
+    print("wrote %s (%d bytes)" % (path, len(data)))
 
 
 if __name__ == "__main__":
